@@ -182,6 +182,15 @@ func generate(c *cli.Context) (err error) {
 }
 
 func create(c *cli.Context) (err error) {
+	var mdir string
+	if mdir, err = findMigrations(c); err != nil {
+		return cli.NewExitError(err, 1)
+	}
+
+	if err = tidal.Create(mdir, c.String("name"), c.String("package")); err != nil {
+		return cli.NewExitError(err, 1)
+	}
+
 	return nil
 }
 

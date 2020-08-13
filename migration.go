@@ -1,14 +1,17 @@
 package tidal
 
 import (
+	"bytes"
 	"database/sql"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -226,6 +229,94 @@ func (m *Migration) Successors() (n int, err error) {
 		return len(migrations[i+1:]), nil
 	}
 	return 0, fmt.Errorf("revision %d was not registered", m.Revision)
+}
+
+const sqldata = `-- Revision {{ .Revision }} generated on {{ .Timestamp }}{{ if .PackageName }}
+-- package: {{ .PackageName }}{{ end }}
+-- migrate: up
+-- insert up migration sql here
+
+-- migrate: down
+-- insert down migration sql here
+
+-- migrate: end
+`
+
+var sqldataTemplate = template.Must(template.New("").Parse(sqldata))
+
+// sqldataContext is used to populate the sqldata template
+type sqldataContext struct {
+	Revision    int
+	Timestamp   string
+	PackageName string
+}
+
+// Create a new SQL migration file for code generation. The migration file is an ANSI
+// SQL file that uses TSQL comments to deliniate the up and down migrations. Using the
+// code generation tool, these files are directly embedded into your application code
+// base using compressed Descriptors, which are registered as migrations at runtime.
+// This helper utility adds the next migration sql file revision (based on the latest
+// registered revision and the maximum revision number from sibling files) and writes
+// out an empty template to the migrations directory.
+func Create(migrationsDirectory, name, packageName string) (err error) {
+	var latestRevision int
+	if len(migrations) > 0 {
+		latestRevision = migrations[len(migrations)-1].Revision
+	}
+
+	var listing []os.FileInfo
+	if listing, err = ioutil.ReadDir(migrationsDirectory); err != nil {
+		return err
+	}
+
+	for _, finfo := range listing {
+		filename := finfo.Name()
+		if !strings.HasSuffix(filename, ".sql") {
+			continue
+		}
+
+		_, revision, err := parseFilename(filename)
+		if err != nil {
+			return err
+		}
+		if revision > latestRevision {
+			latestRevision = revision
+		}
+	}
+
+	// Create the template context
+	now := time.Now().Local()
+	ctx := &sqldataContext{
+		Revision:    latestRevision + 1,
+		Timestamp:   now.Format("2006-01-02 15:04:05 -0700"),
+		PackageName: packageName,
+	}
+
+	// Execute the template
+	builder := &bytes.Buffer{}
+	if err = sqldataTemplate.Execute(builder, ctx); err != nil {
+		return err
+	}
+
+	// Determine the write path
+	if name == "" {
+		name = fmt.Sprintf("auto_%s", now.Format("200601021504"))
+	}
+	name = strings.Replace(name, " ", "_", -1)
+	outpath := filepath.Join(migrationsDirectory, fmt.Sprintf("%04d_%s.sql", latestRevision+1, name))
+
+	// Create the generated migration template file
+	var f *os.File
+	if f, err = os.Create(outpath); err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if _, err = f.Write(builder.Bytes()); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // helper function parse a filename or path into Migration metadata
