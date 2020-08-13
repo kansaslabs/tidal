@@ -54,11 +54,15 @@ func main() {
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
 			Name:  "p, package",
-			Usage: "override package name from directory or migration file",
+			Usage: "override package name from directory or migration file(s)",
 		},
 		cli.StringFlag{
 			Name:  "m, migrations",
 			Usage: "specify directory to look for migrations in (otherwise performs search)",
+		},
+		cli.StringFlag{
+			Name:  "o, out",
+			Usage: "location to write generated code (default: migrations parent directory)",
 		},
 	}
 	app.Action = generate
@@ -168,7 +172,12 @@ func generate(c *cli.Context) (err error) {
 		return cli.NewExitError(err, 1)
 	}
 
-	fmt.Println(mdir)
+	outpath := determineFileOutputPath(c)
+	packageName := c.String("package")
+
+	if err = tidal.Generate(mdir, outpath, packageName); err != nil {
+		return cli.NewExitError(err, 1)
+	}
 	return nil
 }
 
@@ -232,4 +241,20 @@ func findMigrations(c *cli.Context) (path string, err error) {
 	default:
 		return "", fmt.Errorf("discovered %d migrations directories, please specify which one to use", len(dirs))
 	}
+}
+
+// If outpath is a go file, e.g. ends in .go - simply write it to that file. Otherwise,
+// assume it is a directory. If the basename is "migrations" use the parent directory.
+func determineFileOutputPath(c *cli.Context) (outpath string) {
+	outpath = c.String("out")
+
+	if strings.HasSuffix(outpath, ".go") {
+		return outpath
+	}
+
+	if strings.ToLower(filepath.Base(outpath)) == "migrations" {
+		return filepath.Join(filepath.Dir(outpath), "migrations.go")
+	}
+
+	return filepath.Join(outpath, "migrations.go")
 }
